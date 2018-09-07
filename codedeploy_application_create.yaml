@@ -1,0 +1,27 @@
+# This template is used to create a codedeploy application
+# and then exports the codedeploy application for use
+# in another stack
+AWSTemplateFormatVersion: '2010-09-09'
+Description: code_deploy_application.template - Create a Code Deploy Application
+Parameters:
+  Name:
+    Type: String
+    Description: Application Name
+Resources:
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Ref 'Name'
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+Outputs:
+  Application:
+    Description: The Code Deploy Application
+    Value: !Ref 'CodeDeployApplication'
+    Export: 
+      Name: !Sub '${AWS::StackName}-codedeployapplicationname'
+  ArtifactBucket:
+    Description: S3 Bucket
+    Value: !Ref 'ArtifactBucket'
+    Export:
+      Name: !Sub '${AWS::StackName}-Artifactbucketname'
