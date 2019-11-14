@@ -1,0 +1,15 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECR repository
+
+Resources:
+  ECRAWS4:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "myrepository"
+      Tags:
+        - Key: 'Name'
+          Value: myrepo
+        - Key: 'Environment'
+          Value: dev
+        - Key: 'Appliction'
+          Value: ecs
