@@ -1,0 +1,270 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Deploy a service into an ECS cluster behind a private load balancer.
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: production
+    Description: The name of the environment to add this service to
+    AllowedValues: [ dev, staging, qa, production ]
+  ClusterName:
+    Type: String
+    Default: utils
+    Description: Name of the cluster
+  TaskName:
+    Type: String
+    Default: ECSTaskLogstash
+  ServiceName:
+    Type: String
+    Default: Logstash6
+    Description: A name for the service
+  ImageUrl:
+    Type: String
+    Default: <CHANGE_ME>
+    Description: The url of a docker image that contains the application process that will handle the traffic for this service.
+  ContainerPort:
+    Type: Number
+    Default: '5044'
+    Description: What port number the application inside the docker container is binding to
+  ContainerCpu:
+    Type: Number
+    Default: '1024'
+    Description: How much CPU to give the container. 1024 is 1 CPU
+  ContainerMemory:
+    Type: Number
+    Default: '2048'
+    Description: How much memory in megabytes to give the container
+  Path:
+    Type: String
+    Default: "*"
+    Description: A path on the public load balancer that this service
+                 should be connected to. Use * to send all load balancer
+                 traffic to this service.
+  Priority:
+    Type: Number
+    Default: '1'
+    Description: The priority for the routing rule added to the load balancer.
+                 This only applies if your have multiple services which have been
+                 assigned to different paths on the load balancer.
+  DesiredCount:
+    Type: Number
+    Default: '3'
+    Description: How many copies of the service task to run
+  Role:
+    Type: String
+    Default: "AmazonECSLogstashTaskToElasticSearchRole"
+    Description: (Optional) An IAM role to give the service's containers if the code within needs to
+                 access other AWS resources like S3 buckets, DynamoDB tables, etc
+  VPCId:
+    Description: "The VPC where the service will be deployed"
+    Type: String
+    Default: <CHANGE_ME>
+  SubnetGroups:
+    Description: "In which Subnet Groups the cluster instances will reside - pick from drop down"
+    Type: List<AWS::EC2::Subnet::Id>
+  ECSServiceSecurityGroups:
+    Description: "List of SecurityGroups - pick from drop down"
+    Type: CommaDelimitedList
+    Default: "sg-xxxxxxxx, sg-yyyyyyyy, sg-zzzzzzzz"
+  Route53HostedZone:
+    Description: "Route53 hosted zone where the logstash network load balancer's DNSName will be aliased to"
+    Type: String
+    Default: "<CHANGE_ME"
+
+Conditions:
+  HasCustomRole: !Not [ !Equals [!Ref 'Role', ''] ]
+
+Resources:
+  # IAM role for the ECS tasks. This will grant containers in the task to call AWS APIs.
+  AmazonECSLogstashTaskToElasticSearchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${TaskName}-role-${EnvironmentName}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+              - ecs-tasks.amazonaws.com
+          Action:
+            - sts:AssumeRole
+      Path: /  
+      Policies:
+        - PolicyName: !Sub ${TaskName}-policy-${EnvironmentName}
+          PolicyDocument:
+            Statement:
+            - Effect: Allow
+              Action:
+                - 'es:*'
+              Resource: '*'
+
+  # A log group for storing the stdout logs from this service's containers
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub ${EnvironmentName}-service-${ServiceName}
+
+  # The task definition. This is a simple metadata description of what
+  # container to run, and what resource requirements it has.
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref 'ServiceName'
+      Cpu: !Ref 'ContainerCpu'
+      Memory: !Ref 'ContainerMemory'
+      RequiresCompatibilities: ['EC2']
+      Tags:
+        - Key: Name
+          Value: Logstash-task
+        - Key: role
+          Value: util
+        - Key: Environment
+          Value: production
+      TaskRoleArn: !GetAtt AmazonECSLogstashTaskToElasticSearchRole.Arn
+      ContainerDefinitions:
+        - Name: !Ref 'ServiceName'
+          Cpu: !Ref 'ContainerCpu'
+          Memory: !Ref 'ContainerMemory'
+          Image: !Ref 'ImageUrl'
+          PortMappings:
+            - HostPort: '5044'
+              ContainerPort: !Ref 'ContainerPort'
+          LogConfiguration:
+            LogDriver: 'awslogs'
+            Options:
+              awslogs-group: !Sub ${EnvironmentName}-service-${ServiceName}
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: !Ref 'ServiceName'
+
+  # IAM role of the ECS service 
+  ECSServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 
+              - ecs.amazonaws.com
+          Action:
+            - sts:AssumeRole
+      Path: /
+      RoleName: !Sub ${ClusterName}-role-${ServiceName}
+      ManagedPolicyArns:
+        -  arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceRole 
+      Policies:
+        - PolicyName: AWSECSServiceRole
+          PolicyDocument:
+            Statement:
+            - Effect: Allow
+              Action:
+                - 'ec2:AttachNetworkInterface'
+                - 'ec2:CreateNetworkInterface'
+                - 'ec2:CreateNetworkInterfacePermission'
+                - 'ec2:DeleteNetworkInterface'
+                - 'ec2:DeleteNetworkInterfacePermission'
+                - 'ec2:Describe*'
+                - 'ec2:DetachNetworkInterface'
+                - 'elasticloadbalancing:DeregisterInstancesFromLoadBalancer'
+                - 'elasticloadbalancing:DeregisterTargets'
+                - 'elasticloadbalancing:Describe*'
+                - 'elasticloadbalancing:RegisterInstancesWithLoadBalancer'
+                - 'elasticloadbalancing:RegisterTargets'
+                - 'route53:ChangeResourceRecordSets'
+                - 'route53:CreateHealthCheck'
+                - 'route53:DeleteHealthCheck'
+                - 'route53:Get*'
+                - 'route53:List*'
+                - 'route53:UpdateHealthCheck'
+                - 'servicediscovery:DeregisterInstance'
+                - 'servicediscovery:Get*'
+                - 'servicediscovery:List*'
+                - 'servicediscovery:RegisterInstance'
+                - 'servicediscovery:UpdateInstanceCustomHealthStatus'
+              Resource: '*'
+
+  # Network Load Balancer for Logstash service
+  LogstashNlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: Logstash-nlb
+      Scheme: internal
+      Subnets: !Ref SubnetGroups
+      Type: network
+      Tags:
+        - Key: Name
+          Value: logstash-network-load-balancer
+        - Key: Environment
+          Value: util
+        - Key: ECS-Service
+          Value: Logstash
+
+  # Listener of Logstash Network Load Balancer
+  LogstashNlbListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: "forward"
+          TargetGroupArn: !Ref LogstashNlbTargetgroup
+      LoadBalancerArn: !Ref LogstashNlb
+      Protocol: TCP
+      Port: 5044
+
+  # Target Group of the Logstash Network Load Balancer
+  LogstashNlbTargetgroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPort: 5044
+      HealthCheckProtocol: TCP
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+      Name: Logstash-nlb-targetgroup
+      Port: 5044
+      Protocol: TCP
+      VpcId: !Ref VPCId
+      Tags:
+        - Key: Name
+          Value: logstash-nlb-targetgroup
+        - Key: Environment
+          Value: util
+
+  # The service. The service is a resource which allows you to run multiple
+  # copies of a type of task, and gather up their logs and metrics, as well
+  # as monitor the number of running tasks and replace any that have crashed
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: LogstashNlbListener
+    Properties:
+      ServiceName: !Ref 'ServiceName'
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+      TaskDefinition: !Ref 'TaskDefinition'
+      DesiredCount: 3
+      HealthCheckGracePeriodSeconds: 600
+      LaunchType: EC2
+      Role: !Ref ECSServiceRole
+      LoadBalancers:
+        - ContainerName: !Ref 'ServiceName'
+          ContainerPort: !Ref 'ContainerPort'
+          TargetGroupArn: !Ref LogstashNlbTargetgroup
+      Tags:
+        - Key: Name
+          Value: logstash-service
+        - Key: Environment
+          Value: util
+
+  # Route53 record set for the logstash network load balancer
+  LogstashRoute53Record:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Ref Route53HostedZone
+      Comment: Alias targeted to the logstash network load balancer
+      RecordSets:
+      - Name: <CHANGE_ME>
+        Type: A
+        AliasTarget:
+          DNSName: !GetAtt LogstashNlb.DNSName
+          HostedZoneId: !GetAtt LogstashNlb.CanonicalHostedZoneID
